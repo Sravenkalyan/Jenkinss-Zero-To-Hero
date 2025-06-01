@@ -5,19 +5,17 @@ pipeline {
       args '--user root -v /var/run/docker.sock:/var/run/docker.sock'
     }
   }
-
   environment {
     SONAR_URL = "http://13.239.113.153:9000"
-    DOCKER_IMAGE = "sraven/ultimate-cicd:${BUILD_NUMBER}"
     GIT_REPO_NAME = "Jenkinss-Zero-To-Hero"
     GIT_USER_NAME = "Sravenkalyan"
+    DOCKER_IMAGE = "sraven/ultimate-cicd:${BUILD_NUMBER}"
   }
-
   stages {
+
     stage('Checkout') {
       steps {
-        // Pull the Git repository
-        git branch: 'main', url: "https://github.com/${env.GIT_USER_NAME}/${env.GIT_REPO_NAME}.git"
+        checkout scm
       }
     }
 
@@ -32,40 +30,35 @@ pipeline {
         withCredentials([string(credentialsId: 'sonarqube', variable: 'SONAR_AUTH_TOKEN')]) {
           sh '''
             cd java-maven-sonar-argocd-helm-k8s/spring-boot-app
-            mvn sonar:sonar -Dsonar.login=$SONAR_AUTH_TOKEN -Dsonar.host.url=$SONAR_URL
+            mvn sonar:sonar -Dsonar.login=$SONAR_AUTH_TOKEN -Dsonar.host.url=${SONAR_URL}
           '''
         }
       }
     }
 
     stage('Build and Push Docker Image') {
-      environment {
-        REGISTRY_CREDENTIALS = credentials('docker-cred')
-      }
       steps {
-        script {
+        withCredentials([usernamePassword(credentialsId: 'docker-cred', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
           sh '''
             cd java-maven-sonar-argocd-helm-k8s/spring-boot-app
-            docker build -t $DOCKER_IMAGE .
+            docker login -u $DOCKER_USER -p $DOCKER_PASS
+            docker build -t ${DOCKER_IMAGE} .
+            docker push ${DOCKER_IMAGE}
           '''
-          def dockerImage = docker.image("${DOCKER_IMAGE}")
-          docker.withRegistry('https://index.docker.io/v1/', "docker-cred") {
-            dockerImage.push()
-          }
         }
       }
     }
 
-    stage('Update Deployment File') {
+    stage('Update Deployment File and Push to GitHub') {
       steps {
         withCredentials([string(credentialsId: 'github', variable: 'GITHUB_TOKEN')]) {
           sh '''
-            # Ensure Git safe directory (fix for "not in a git directory")
-            git config --global --add safe.directory "$PWD"
+            git config --global --add safe.directory `pwd`
+            git config user.email "sravenkalyan555@gmail.com"
+            git config user.name "sraven"
 
-            git config user.email "abhishek.xyz@gmail.com"
-            git config user.name "Abhishek Veeramalla"
             sed -i "s/replaceImageTag/${BUILD_NUMBER}/g" java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml
+
             git add java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml
             git commit -m "Update deployment image to version ${BUILD_NUMBER}" || echo "No changes to commit"
             git push https://${GITHUB_TOKEN}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME}.git HEAD:main
